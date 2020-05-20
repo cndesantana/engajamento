@@ -1,0 +1,208 @@
+---
+title: "Radar de Engajamento"
+author: "DataSCOUT"
+date: "5/10/2020"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(tidyverse)
+library(stringr)
+library(plotly)
+library(lubridate)
+
+
+setwd("/home/cdesantana/DataSCOUT/Docker_ShinyApp/radar_de_engajamento")
+editoria = read_xlsx("data/editoria_conteudo_20200501_20200514.xlsx")
+editoria$media <- rep(NA,nrow(editoria))
+all_type_editoria <- unique(sort(editoria$Editoria))
+all_links <- unique(sort(editoria$Link))
+editoria$media[str_detect(editoria$Link,"facebook")] <- "FB"
+editoria$media[str_detect(editoria$Link,"instagram")] <- "IG"
+editoria$media[str_detect(editoria$Link,"twitter")] <- "TW"
+
+corpositivo <- "#20B2AA";
+cornegativo <- "#c00000";
+corneutro <- "#FFA500";
+
+```
+
+
+
+```{r eruptions, echo=FALSE}
+inputPanel(
+  selectInput("media", label = "Select a media source:",
+              choices = c("FB","IG","TW"), selected = "FB")
+)
+
+getEngajamentoSentimentoEditoria<- function(comments, posts, media_){
+  comments %>% 
+    mutate(Data = dmy_hm(Data),
+           Week = case_when(Data >= ymd("2020-05-08") ~ "Semana 2",
+                            TRUE ~ "Semana 1")) %>%
+    group_by(LinkPost, Week) %>%
+    summarise(npos = length(which(Polaridade=="Positivo")),
+              nneg = length(which(Polaridade=="Negativo")),
+              nneu = length(which(Polaridade=="Neutro")),
+              isent = (npos - nneg)/ (npos + nneg),
+              ifav = npos/n(),
+              ineg = nneg/n()) %>%
+    ungroup()%>%
+    filter(npos + nneg + nneu >= 2) %>%
+    left_join(posts %>% 
+                select(`Taxa de engajamento`, Link) %>%
+                left_join(editoria %>% filter(media == media_), by = "Link"), 
+              by = c("LinkPost"="Link")) %>%
+    filter(!is.na(`Taxa de engajamento`), 
+           !is.na(Editoria))%>%
+    arrange(Week,`Taxa de engajamento`, ifav)
+}
+
+barPlotEdit <- function(plotEngSent){
+  media <- plotEngSent$media[1]
+  png(paste0(getwd(),"/",media,"_boxplot_sent_eng_edi.png"),width=3200,height=1800,res=300)
+  p1 <- plotEngSent %>% 
+      mutate(sent = case_when(isent < -0.01 ~ "Negativo",
+                              isent > 0.01 ~ "Positivo",
+                              TRUE ~ "Neutro")) %>%
+      ggplot(aes(y = `Taxa de engajamento`,
+                 x = Editoria)) +
+      geom_bar(stat="identity", fill=corpositivo, show.legend = FALSE) + 
+      theme_bw()+
+      labs(x = "Tipo de Post",
+           y = "Engajamento",
+           fill = "Sentimento Predominante",
+           title = "Engajamento por tipo de post",
+           subtitle = paste("Posts do ",media))
+#+scale_fill_manual("Sentimento Predominante", 
+#                      values = c("Positivo" = corpositivo,
+#                                 "Negativo" = cornegativo, 
+#                                 "Neutro" = corneutro))
+  print(p1)
+  dev.off()
+}
+
+barPlotEditSent <- function(comments, posts, media_){
+  png(paste0(getwd(),"/",media,"_boxplot_sent_edi.png"),width=3200,height=1800,res=300)
+  p1 <- comments %>% 
+    group_by(Link, LinkPost, Polaridade) %>%  
+    left_join(posts %>% 
+                select(Link) %>%
+                left_join(editoria %>% filter(media == media_), by = "Link"), 
+              by = c("LinkPost"="Link")) %>% ungroup() %>%
+    filter(!is.na(Editoria)) %>%
+    group_by(Polaridade, Editoria) %>%
+    summarise(total = n()) %>%
+      ggplot(aes(y = total,
+                 x = Editoria,
+                 fill = Polaridade)) +
+      geom_bar(stat="identity") + 
+      theme_bw()+
+      labs(x = "Tipo de Post",
+           y = "# de comentarios",
+           fill = "Sentimento Predominante",
+           title = "Sentimento por tipo de post",
+           subtitle = paste("Posts do ",media))+
+    scale_fill_manual("Sentimento", 
+                      values = c("Positivo" = corpositivo,
+                                 "Negativo" = cornegativo, 
+                                 "Neutro" = corneutro))
+  print(p1)
+  dev.off()
+}
+
+
+barPlotEditAllSent <- function(plotEngSent){
+  media <- plotEngSent$media[1]
+  png(paste0(getwd(),"/",media,"_allsent_boxplot_sent_eng_edi.png"),width=3200,height=1800,res=300)
+  p1 <- plotEngSent %>% 
+      mutate(sent = case_when(isent < -0.01 ~ "Negativo",
+                              isent > 0.01 ~ "Positivo",
+                              TRUE ~ "Neutro")) %>%
+      ggplot(aes(y = `Taxa de engajamento`,
+                 fill = sent,
+                 x = Editoria)) +
+      geom_bar(stat="identity") + 
+      theme_bw()+
+      labs(x = "Tipo de Post",
+           y = "Engajamento",
+           fill = "Sentimento Predominante",
+           title = "Engajamento por tipo de post",
+           subtitle = paste("Posts do ",media)) +
+    scale_fill_manual("Sentimento Predominante", 
+                      values = c("Positivo" = corpositivo,
+                                 "Negativo" = cornegativo, 
+                                 "Neutro" = corneutro))
+  print(p1)
+  dev.off()
+}
+
+scatterPlotEdit <- function(plotEngSent){
+  media <- plotEngSent$media[1]
+  png(paste0(getwd(),"/",media,"_scatterplot_sent_eng_edi.png"),width=3200,height=1800,res=300)
+  p1 <- plotEngSent %>%
+      filter(!is.nan(isent)) %>%
+      group_by(Editoria, Week) %>%
+      summarise(meanEngajamento = mean(`Taxa de engajamento`,na.rm=TRUE),
+                meanSentimento = mean(isent,na.rm=TRUE),
+                total = n()) %>%
+      ggplot(aes(y = meanEngajamento,
+                 x = meanSentimento,
+                 col = Editoria,
+                 size = total)) + 
+      geom_jitter() + 
+      theme_bw()+
+      labs(x = "Sentimento",
+           y = "Engajamento",
+           col = "Tipo de post",
+           title = "Engajamento por tipo de post",
+           subtitle = paste("Posts do ",media)) +
+        scale_color_manual("Tipo de Post", 
+                      values = c("Critica Doria" = palette()[1],
+                                 "Critica Humanizada" = palette()[6],
+                                 "Divulgação" = palette()[2], 
+                                 "Gestor" = palette()[3],
+                                 "Homenagem" = palette()[8],
+                                 "Humanizado" = palette()[4],
+                                 "Live" = palette()[5])) +
+    facet_wrap(~ Week) +
+    xlim(-1.2,1.2)
+  print(p1)
+  dev.off()
+}
+
+```
+
+
+```{r echo=FALSE}
+
+for(media in c("FB","IG","TW")){
+  comments = read_xlsx(paste0("data/comments_",media,"_20200501_20200514.xlsx"))
+  posts = read_xlsx(paste0("data/posts_",media,"_20200501_20200514.xlsx"))
+  ##posts
+  if(media == "FB"){
+    comments$LinkPost <- substr(comments$Link, 1, regexpr("\\?", comments$Link)-1)
+  }else if(media == "IG"){
+    posts$`Taxa de engajamento` <-100*(posts$`Curtidas/Gostei` + posts$Comentários*1.5)/(posts$Alcance)
+    comments$LinkPost <- comments$Link
+  }else if(media == "TW"){
+    posts$`Taxa de engajamento` <-(posts$`Curtidas/Gostei` + posts$Comentários*1.5 + 2*posts$Compartilhamentos)/nrow(posts)  
+    comments$LinkPost <- paste("https:/",comments$Mídia,"marciofrancasp","status",comments$`ID do Post`, sep="/")
+  }
+  
+  plotEngSent <- getEngajamentoSentimentoEditoria(comments = comments, posts = posts, media_ = media)
+  scatterPlotEdit(plotEngSent = plotEngSent)
+  barPlotEdit(plotEngSent = plotEngSent)
+  barPlotEditSent(comments, posts, media)
+#  barPlotEditFav(plotEngSent = plotEngSent)
+#  barPlotEditNeg(plotEngSent = plotEngSent)
+
+}
+```
+
+
+
+
